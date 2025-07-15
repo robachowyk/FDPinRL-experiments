@@ -21,11 +21,12 @@
 ################################################################################
 #                       CREATE A TABLE TO SAVE RESULTS                         #
 ################################################################################
+library(xgboost)
 
 setwd("draftwork/")
 
 DataSource = "SHIW"
-Area = "3"
+Area = "2"
 Method = "arf"
 
 newDirectory = sprintf("%s-Area: %s-%s---%s", DataSource, Area, Method, Sys.time())
@@ -94,10 +95,13 @@ PIVs_config = list( ANASCI     = list(stable = TRUE),
                     SESSO      = list(stable = TRUE),
                     STUDIO     = list(stable = TRUE),
                     STACIV     = list(stable = TRUE),
-                    IREG       = list(stable = TRUE) )
+                    IREG       = list(stable = TRUE),
+                    # ,
+                    NASCREG    = list(stable = TRUE) 
+                    )
 PIVs = names(PIVs_config)
 PIVs_stable = sapply(PIVs_config, function(x) x$stable)
-controlOnMistakes = c(TRUE, TRUE, FALSE, FALSE, FALSE)
+controlOnMistakes = c(TRUE, TRUE, FALSE, FALSE, FALSE, TRUE)
 
 ### FILTER THE DATA ON THE INTERSECTING SUPPORT OF THE PIVS
 
@@ -140,10 +144,15 @@ if(nrow(df2)>nrow(df1)){
 levels_PIVs = lapply(PIVs, function(x) levels(factor(as.character(c(encodedA[,x], encodedB[,x])))))
 for(i in 1:length(PIVs))
 {
-  encodedA[,PIVs[i]] = as.factor(as.numeric(factor(as.character(encodedA[,PIVs[i]]), levels=levels_PIVs[[i]])))
-  encodedB[,PIVs[i]] = as.factor(as.numeric(factor(as.character(encodedB[,PIVs[i]]), levels=levels_PIVs[[i]])))
+  encodedA[,PIVs[i]] = (as.numeric(factor(as.character(encodedA[,PIVs[i]]), levels=levels_PIVs[[i]])))
+  encodedB[,PIVs[i]] = (as.numeric(factor(as.character(encodedB[,PIVs[i]]), levels=levels_PIVs[[i]])))
 }
-nvalues = sapply(levels_PIVs, length)
+for(i in 1:length(PIVs))
+{
+  NewA[,PIVs[i]] = (as.numeric(factor(as.character(NewA[,PIVs[i]]), levels=levels_PIVs_2[[i]])))
+  NewB[,PIVs[i]] = (as.numeric(factor(as.character(NewB[,PIVs[i]]), levels=levels_PIVs_2[[i]])))
+}
+nvalues = sapply(levels_PIVs_2, length)
 nbrRealRecordsB = nrow(encodedB)
 nbrRealRecordsA = nrow(encodedA)
 encodedA$localIndex = 1:nbrRealRecordsA
@@ -188,26 +197,114 @@ colnames(df) = PIVs
 rownames(df) = c("NaN in A", "NaN in B", "NaN in A true", "NaN in B true", "agreements btw A and B true links", "unique values", "size A", "size B", "Nlinks")
 write.csv(df, file.path(newDirectory, "dataset_recapstory.csv"))
 
+
+
+
+
+### SOME WORK FOR REVIEWS
+rownames(encodedA) = 1:nrow(encodedA)
+rownames(encodedB) = 1:nrow(encodedB)
+
+encodedA[,PIVs][ is.na(encodedA[,PIVs]) ] = 0
+encodedB[,PIVs][ is.na(encodedB[,PIVs]) ] = 0
+
+NaiveRL = FlexRL::launchNaive(PIVs, encodedA[,PIVs], encodedB[,PIVs])
+length(unique(NaiveRL$idxA))
+length(unique(NaiveRL$idxB))
+nrow(NaiveRL)
+nrow(encodedB)
+
+# synthesis
+rownames(NewA) = 1:nrow(NewA)
+rownames(NewB) = 1:nrow(NewB)
+# TEST: make t so that true link / non-link have different dstr. ex with birth year
+hist(encodedA[encodedA$ID %in% linkedID,"ANASCI"])
+hist(encodedA[encodedB$ID %in% linkedID,"ANASCI"])
+hist(encodedA[!encodedA$ID %in% linkedID,"ANASCI"])
+hist(encodedA[!encodedB$ID %in% linkedID,"ANASCI"])
+# change the birth year: remove true link for young ppl <= 45 or as a 1st step, make it NA
+encodedA[(encodedA$ID %in% linkedID) & (encodedA$ANASCI <= 45 ),"ANASCI"] = NA
+encodedB[(encodedB$ID %in% linkedID) & (encodedB$ANASCI <= 45 ),"ANASCI"] = NA
+
+arf = adversarial_rf(encodedB[,PIVs])
+psi = forde(arf, encodedB[,PIVs])
+syntheticNewB = forge(psi, nrow(encodedB))
+
+NaiveRL_synth = FlexRL::launchNaive(PIVs, encodedA[,PIVs], syntheticNewB[,PIVs])
+length(unique(NaiveRL_synth$idxA))
+length(unique(NaiveRL_synth$idxB))
+nrow(NaiveRL_synth)
+###
+
+
+Newdata = synthesise("arf", encodedA, encodedB, PIVs, as.integer(0.10*nbrRealRecordsB))
+NewB = Newdata$NewB
+Newdata = synthesise("arf", encodedB, encodedA, PIVs, as.integer(0.10*nbrRealRecordsA))
+NewA = Newdata$NewB
+
 for(iterator in 1:10){
   
   gc()
   
   ### SYNTHESISE
   
-  subsample_size = as.integer(0.15*nbrRealRecordsB)
+  subsample_size = as.integer(0.10*nbrRealRecordsB)
   
   # Newdata = synthesise("mice", encodedA, encodedB, PIVs, as.integer(0.20*nbrRealRecordsB))
   # NewA = Newdata$NewA
   # NewB = Newdata$NewB
   
-  Newdata = synthesise("arf", encodedA, encodedB, PIVs, as.integer(0.15*nbrRealRecordsB))
+  Newdata = synthesise("synthpop", encodedA, encodedB, PIVs, as.integer(0.10*nbrRealRecordsB))
   NewA = Newdata$NewA
   NewB = Newdata$NewB
   
-  Newdata = synthesise("arf", encodedA, encodedB, PIVs, nbrRealRecordsB)
-  NewB = Newdata$NewB
-  Newdata = synthesise("arf", encodedB, encodedA, PIVs, nbrRealRecordsA)
+  Newdata = synthesise("synthpop", NewB, NewA, PIVs, as.integer(0.10*nbrRealRecordsA))
   NewA = Newdata$NewB
+  NewB = Newdata$NewA
+  
+  for(i in 1:length(PIVs)){
+    intersect_support_piv = intersect( unique(NewA[,PIVs[i]]), unique(NewB[,PIVs[i]]) )
+    NewA = NewA[NewA[,PIVs[i]] %in% c(NA,intersect_support_piv),]
+    NewB = NewB[NewB[,PIVs[i]] %in% c(NA,intersect_support_piv),]
+  }
+  
+  synthetic_rec = NewB[NewB$source == "synthetic",]
+  B_original_rec = NewB[NewB$source == "B",]
+  train_data_1 = synthetic_rec[1:(as.integer(nrow(synthetic_rec)/2)),]
+  test_data_1 = synthetic_rec[((as.integer(nrow(synthetic_rec)/2))+1):(nrow(synthetic_rec)),]
+  train_data_2 = B_original_rec[1:(as.integer(nrow(B_original_rec)/2)),]
+  test_data_2 = B_original_rec[((as.integer(nrow(B_original_rec)/2))+1):(nrow(B_original_rec)),]
+  train_data = rbind(train_data_1, train_data_2)
+  train_data_var = data.matrix(train_data[,PIVs])
+  train_data_labels = train_data[,"source"]
+  train_data_labels = (train_data_labels == "B")
+  train_data_labels = data.matrix(train_data_labels)
+  
+  test_data = rbind(test_data_1, test_data_2)
+  test_data_var = data.matrix(test_data[,PIVs])
+  test_data_labels = test_data[,"source"]
+  test_data_labels = (test_data_labels == "B")
+  test_data_labels = data.matrix(test_data_labels)
+  
+  
+  dtrain <- xgb.DMatrix(data=train_data_var, label=train_data_labels)
+  dtest <- xgb.DMatrix(data=test_data_var, label=test_data_labels)
+  
+  model <- xgboost(data = dtrain, # the data   
+                   nround = 2, # max number of boosting iterations
+                   objective = "binary:logistic")
+  
+  pred <- predict(model, dtest)
+  
+  roc_curve <- roc(test_data_labels, pred)
+  roc_curve$auc
+  
+
+  
+  # Newdata = synthesise("arf", encodedA, encodedB, PIVs, nbrRealRecordsB)
+  # NewB = Newdata$NewB
+  # Newdata = synthesise("arf", encodedB, encodedA, PIVs, nbrRealRecordsA)
+  # NewA = Newdata$NewB
 
   # Newdata = synthesise("synthpop", encodedA, encodedB, PIVs, as.integer(0.20*nbrRealRecordsB))
   # NewA = Newdata$NewA
@@ -321,6 +418,8 @@ for(iterator in 1:10){
   ### ENCODE THE MISSING VALUES
   NewA[,PIVs][ is.na(NewA[,PIVs]) ] = 0
   NewB[,PIVs][ is.na(NewB[,PIVs]) ] = 0
+  encodedA[,PIVs][ is.na(encodedA[,PIVs]) ] = 0
+  encodedB[,PIVs][ is.na(encodedB[,PIVs]) ] = 0
   
   ### LAUNCH SIMPLISTIC APPROACH
   print("Naive starts")
@@ -369,23 +468,23 @@ for(iterator in 1:10){
   
   ### LAUNCH FLEXRL
   print("FlexRL starts")
-  data = list(A = NewA,
-              B = NewB,
+  data = list(A = NewA[,PIVs],
+              B = NewB[,PIVs],
               Nvalues = nvalues,
               PIVs_config = PIVs_config,
               controlOnMistakes = controlOnMistakes,
               sameMistakes = TRUE,
               phiMistakesAFixed = FALSE,
               phiMistakesBFixed = FALSE,
-              phiForMistakesA = c(NA,NA,NA,NA,NA),
-              phiForMistakesB = c(NA,NA,NA,NA,NA))
-  fit = stEM( data = data,
+              phiForMistakesA = c(NA,NA,NA,NA,NA,NA),
+              phiForMistakesB = c(NA,NA,NA,NA,NA,NA))
+  fit = FlexRL::stEM( data = data,
               StEMIter = 20,
               StEMBurnin = 10,
               GibbsIter = 30,
               GibbsBurnin = 15,
               musicOn = FALSE,
-              newDirectory = newDirectory,
+              newDirectory = NULL,
               saveInfoIter = FALSE )
   #
   # DeltaVector = as.vector(fit$Delta$x)
@@ -402,6 +501,100 @@ for(iterator in 1:10){
   #
   DeltaResult = fit$Delta
   colnames(DeltaResult) = c("idxA","idxB","probaLink")
+  
+  # linkage scores as output
+  missingzeros = nrow(encodedA)*nrow(encodedB) - nrow(DeltaResult)
+  testhisto = hist(DeltaResult[,"probaLink"], xlim=c(0,1), ylim=c(0,100))
+  testhisto$counts[1] = testhisto$counts[1] + missingzeros
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10), main="linkage scores output", xlab="")
+  
+  # linkage scores for real pairs 
+  missingzeros = nrow(encodedA)*nrow(encodedB) - nrow(DeltaResult[(DeltaResult$idxB<=nbrRealRecordsB)&(DeltaResult$idxA<=nbrRealRecordsA),])
+  testhisto = hist(DeltaResult[(DeltaResult$idxB<=nbrRealRecordsB)&(DeltaResult$idxA<=nbrRealRecordsA),"probaLink"], xlim=c(0,1), ylim=c(0,100))
+  testhisto$counts[1] = testhisto$counts[1] + missingzeros
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10), main="linkage scores of real pairs", xlab="")
+  
+  # linkage scores for synthetic pairs 
+  missingzeros = nrow(encodedA)*nrow(encodedB) - nrow(DeltaResult[(DeltaResult$idxB>nbrRealRecordsB)|(DeltaResult$idxA>nbrRealRecordsA),])
+  testhisto = hist(DeltaResult[(DeltaResult$idxB>nbrRealRecordsB)|(DeltaResult$idxA>nbrRealRecordsA),"probaLink"], xlim=c(0,1), ylim=c(0,100))
+  testhisto$counts[1] = testhisto$counts[1] + missingzeros
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10), main="linkage scores of synthetic pairs", xlab="")
+  
+  falsematchrealscore = c()
+  falsematchsyntheticscore = c()
+  truematchscore = c()
+  for(i in 1:nrow(DeltaResult)){
+    if(!is.na(NewB[DeltaResult[i,"idxB"],"ID"]) & !is.na(NewA[DeltaResult[i,"idxA"],"ID"])){
+      if(NewA[DeltaResult[i,"idxA"],"ID"] == NewB[DeltaResult[i,"idxB"],"ID"]){
+        truematchscore = c(truematchscore, DeltaResult[i,"probaLink"])
+      }else{
+        falsematchrealscore = c(falsematchrealscore, DeltaResult[i,"probaLink"])
+      }
+    }else{
+      falsematchsyntheticscore = c(falsematchsyntheticscore, DeltaResult[i,"probaLink"])
+    }
+  }
+  
+  # linkage scores for TP
+  testhisto = hist(truematchscore, xlim=c(0,1), ylim=c(0,100))
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10), main="linkage scores of TP", xlab="")
+  
+  # linkage scores for real FP
+  testhisto = hist(falsematchrealscore, xlim=c(0,1), ylim=c(0,100))
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10), main="linkage scores of real FP", xlab="")
+  
+  # linkage scores for synth FP
+  testhisto = hist(falsematchsyntheticscore, xlim=c(0,1), ylim=c(0,100))
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10), main="linkage scores of synth FP", xlab="")
+  
+  
+  missingzeros = nrow(NewA)*nrow(NewB) - nrow(DeltaResult[(DeltaResult$idxB<=nbrRealRecordsB)&(DeltaResult$idxA<=nbrRealRecordsA),])
+  testhisto = hist(DeltaResult[(DeltaResult$idxB<=nbrRealRecordsB)&(DeltaResult$idxA<=nbrRealRecordsA),"probaLink"], xlim=c(0,1), ylim=c(0,100))
+  testhisto$counts[1] = testhisto$counts[1] + missingzeros
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10))
+  
+  missingzeros = nrow(encodedA)*0.10*nrow(encodedB) - nrow(DeltaResult[DeltaResult$idxB>nbrRealRecordsB,])
+  testhisto = hist(DeltaResult[DeltaResult$idxB>nbrRealRecordsB,"probaLink"])
+  testhisto$counts[1] = testhisto$counts[1] + missingzeros
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10))
+  
+  testhisto = hist(truematchscore)
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10))
+  
+  testhisto = hist(falsematchrealscore)
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10))
+  
+  testhisto = hist(falsematchsyntheticscore)
+  testhisto$counts = log10(testhisto$counts)
+  plot(testhisto, xlim=c(0,1), ylim=c(0,10))
+  
+  hist(falsematchrealscore)
+  
+  falsematchrealscore = c()
+  falsematchsyntheticscore = c()
+  truematchscore = c()
+  for(i in 1:nrow(DeltaResult)){
+    if(!is.na(NewB[DeltaResult[i,"idxB"],"ID"])){
+      if(NewA[DeltaResult[i,"idxA"],"ID"] == NewB[DeltaResult[i,"idxB"],"ID"]){
+        truematchscore = c(truematchscore, DeltaResult[i,"probaLink"])
+      }else{
+        falsematchrealscore = c(falsematchrealscore, DeltaResult[i,"probaLink"])
+      }
+    }else{
+      falsematchsyntheticscore = c(falsematchsyntheticscore, DeltaResult[i,"probaLink"])
+    }
+  }
+  
   if(nrow(DeltaResult)>1){
     DeltaProba = DeltaResult$probaLink
     fdrhat = 1 - sum(DeltaProba[DeltaProba>0.5])/sum(DeltaProba>0.5)
