@@ -52,5 +52,5 @@ rsconnect/
 **/.DS_Store
 
 # Do not publish NLTCS data (non encoded versions)
-NLTCSData/df1982.txt
-NLTCSData/df1994.txt
+/NLTCSData/df1982.txt
+/NLTCSData/df1994.txt
